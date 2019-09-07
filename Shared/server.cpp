@@ -34,8 +34,8 @@ private:
   {
     bf::directory_iterator item_begin(SHARE_PATH);
     bf::directory_iterator item_end;
-    //std::stringstream body;
-    //body << "<html><body>";
+    std::stringstream body;
+    body << "<html><body>";
     //std::string body;
     for(; item_begin != item_end; ++item_begin)
     {
@@ -49,14 +49,14 @@ private:
       //获取文件名
       std::string name = item_begin->path().filename().string();
       //std::cout << name << std::endl;
-      rsp.body += name + "\n";
-      //body << "<h4><a href='/list/" << name <<  "'>";
-      //body << name;
-      //body << "</a></h4>";
+      //rsp.body += name + "\n";
+      body << "<h4><a href='/list/" << name <<  "'>";
+      body << name;
+      body << "</a></h4>";
     }
-    //body << "</body></html>";
+    body << "</body></html>";
     rsp.set_header("Content-Type", "text/html");
-    //rsp.body = body.str();
+    rsp.body = body.str();
     rsp.status = 200;
     //rsp.set_content(&body[0], body.size(), "text");
   }
@@ -65,16 +65,6 @@ private:
   {
     bf::path path(req.path);
     std::string name = std::string(SHARE_PATH) + "/" + path.filename().string();
-    if(!bf::exists(name))
-    {
-      rsp.status = 404;
-      return;
-    }
-    if(bf::is_directory(name))
-    {
-      rsp.status = 403;
-      return;
-    }
     //打开文件
     std::ifstream file(name, std::ios::binary);
     if(!file.is_open())
