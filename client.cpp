@@ -5,11 +5,41 @@
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <thread>
 #include "httplib.h"
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
+#define RANGE_SIZE (1024 << 20)
 using namespace httplib;
 namespace bf = boost::filesystem;
+class Download
+{
+  public:
+    bool _res;
+    Download()
+      :_res(false)
+    {
+
+    }
+    void SetData(std::string host, std::string& name, int64_t& start, int64_t& end, int64_t& len)
+    {
+      _host = host;
+      _name = name;
+      _start = start;
+      _end = end;
+      _len = len;
+    }
+    bool Start()
+    {
+      return true;
+    }
+  private:
+    std::string _name;
+    std::string _host;
+    int64_t _start;
+    int64_t _end;
+    int64_t _len;
+};
 class P2PClient
 {
   public:
@@ -82,7 +112,7 @@ class P2PClient
         uint32_t net, host;
         net = ntohl(ip->sin_addr.s_addr & mask->sin_addr.s_addr);
         host = ntohl(~mask->sin_addr.s_addr);
-        for(int i = 128; i < host; i++)
+        for(int i = 1; i < host; i++)
         {
           struct in_addr ip;
           ip.s_addr = htonl(net + i);
@@ -92,22 +122,34 @@ class P2PClient
       freeifaddrs(addrs);
       return true;
     }
+    //线程配对入口函数
+    //注意这里的参数要和下面线程创建中的入口函数参数类型严格匹配，如果是引用下面也得传引用
+    void HostPair(std::string& i)
+    {
+      Client client(i.c_str(),_srv_port);
+      auto rsp = client.Get("/hostpair");
+      if(rsp && rsp->status == 200)
+      {
+        _online_list.push_back(i);
+      }
+      printf("%s\n", i.c_str());
+      return;
+    }
     //获取在线主机列表
     bool GetOnlineHost(std::vector<std::string>& list)
     {
+      _online_list.clear();
+      std::vector<std::thread> thr_list(list.size());
       //广播配对
-      for(auto& i : list)
+      for(int i = 0; i < list.size(); i++)
       {
-        Client client(&i[0],_srv_port);
-        auto rsp = client.Get("/hostpair");
-        if(rsp && rsp->status == 200)
-        {
-          std::cout << "host" << i << " pair success" << std::endl;
-          _online_list.push_back(i);
-          break;
-          continue;
-        }
-        std::cout << "host" << i << " pair failed" << std::endl;
+        //一个个发送连接请求过慢，使用多线程并行完成
+        //参数与入口函数参数类型严格匹配
+        thr_list[i] = std::move(std::thread(&P2PClient::HostPair, this, std::ref(list[i])));
+      }
+      for(auto& i : thr_list)
+      {
+        i.join();
       }
       return true;
     }
@@ -168,37 +210,95 @@ class P2PClient
       name = _file_list[file_idx];
       return true;
     }
+    void RangeDownload(Download* dl)
+    {
+      dl->Start();
+    }
     //下载文件
     bool DownloadFIle(std::string& name)
     {
       Client client(_online_list[_host_idx].c_str(), _srv_port);
       std::string uri = "/list/" + name;
-      auto rsp = client.Get(uri.c_str());
+      auto rsp = client.Head(uri.c_str());
       if(rsp && rsp->status == 200)
       {
-        std::string realpath = "Shared/" + name;
-        std::ofstream file(realpath, std::ios::binary);
-        //打开失败
-        if(!file.is_open())
+        //std::string realpath = "Shared/" + name;
+        //std::ofstream file(realpath, std::ios::binary);
+        ////打开失败
+        //if(!file.is_open())
+        //{
+        //  std::cerr << "file " << realpath << " open failed" << std::endl;
+        //  return false;
+        //}
+        ////全部写入文件中
+        //file.write(&rsp->body[0], rsp->body.size());
+        ////写入失败
+        //if(!file.good())
+        //{
+        //  std::cerr << "file " << realpath << " write body error" << std::endl;
+        //  return false;
+        //}
+        //file.close();
+        //std::cout << "file " << realpath << " download success" << std::endl;
+        if(rsp->has_header("Content-Length"))
         {
-          std::cerr << "file " << realpath << " open failed" << std::endl;
+          //表示可以获取文件长度进行分块下载
+          std::string len = rsp->get_header_value("Content-Length");
+          int64_t content_len;
+          std::stringstream tmp;
+          tmp << len;
+          tmp >> content_len;
+          int count = content_len / RANGE_SIZE;
+          std::vector<std::thread> thr_list(count + 1);
+          std::vector<Download> res_list(count + 1);
+          for(int i = 0; i <= count; i++)
+          {
+            int64_t start = i * RANGE_SIZE;
+            int64_t end = (i + 1) * RANGE_SIZE;
+            if(i == count)
+            {
+              if(content_len % RANGE_SIZE == 0)
+              {
+                break;
+              }
+              end = content_len - 1;
+            }
+            int64_t len = end - start + 1;
+            res_list[i].SetData(host, name, start, end, len);
+            std::thread thr(&P2PClient::RangeDownload, this, &res_list[i]); 
+            thr_list[i] = std::move(thr);
+          }
+          bool ret = true;
+          for(int i = 0; i <= count; i++)
+          {
+            thr_list[i].join();
+            if(res_list[i]._res == true)
+            {
+              continue;
+            }
+            ret = false;
+          }
+          if(ret == false)
+          {
+            std::cerr << "download file " << name << " failed" << std::endl;;
+            return false;
+          }
+        }
+        else 
+        {
+          //无法进行分块下载
+          //1.正常下载（有风险）
+          //2.报错不支持
+          std::cerr << "download file " << name << " failed" << std::endl;;
           return false;
         }
-        //全部写入文件中
-        file.write(&rsp->body[0], rsp->body.size());
-        //写入失败
-        if(!file.good())
-        {
-          std::cerr << "file " << realpath << " write body error" << std::endl;
-          return false;
-        }
-        file.close();
-        std::cout << "file " << realpath << " download success" << std::endl;
       }
       else
       {
         std::cerr << "file " << name << " download failed" << std::endl;
+        return false;
       }
+      std::cout << "download file " << name << " success" << std::endl;
       return true;
     }
     //界面
