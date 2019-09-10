@@ -9,37 +9,38 @@
 #include "httplib.h"
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/thread.hpp>
 #define RANGE_SIZE (1024 << 20)
 using namespace httplib;
 namespace bf = boost::filesystem;
-class Download
-{
-  public:
-    bool _res;
-    Download()
-      :_res(false)
-    {
-
-    }
-    void SetData(std::string host, std::string& name, int64_t& start, int64_t& end, int64_t& len)
-    {
-      _host = host;
-      _name = name;
-      _start = start;
-      _end = end;
-      _len = len;
-    }
-    bool Start()
-    {
-      return true;
-    }
-  private:
-    std::string _name;
-    std::string _host;
-    int64_t _start;
-    int64_t _end;
-    int64_t _len;
-};
+//class Download
+//{
+//  public:
+//    bool _res;
+//    Download()
+//      :_res(false)
+//    {
+//
+//    }
+//    void SetData(std::string host, std::string& name, int64_t& start, int64_t& end, int64_t& len)
+//    {
+//      _host = host;
+//      _name = name;
+//      _start = start;
+//      _end = end;
+//      _len = len;
+//    }
+//    bool Start()
+//    {
+//      return true;
+//    }
+//  private:
+//    std::string _name;
+//    std::string _host;
+//    int64_t _start;
+//    int64_t _end;
+//    int64_t _len;
+//};
 class P2PClient
 {
   public:
@@ -210,96 +211,199 @@ class P2PClient
       name = _file_list[file_idx];
       return true;
     }
-    void RangeDownload(Download* dl)
+    //分块下载，线程入口函数
+    void RangeDownload(std::string host, std::string name, int64_t start, int64_t end, bool* res)
     {
-      dl->Start();
+      *res = false;
+      std::string uri = "/list/" + name;
+      std::string realpath = "Download/" + name;
+      std::stringstream range_val;
+      range_val << "bytes:" << start << "-" << end;
+      Client client(host.c_str(), _srv_port);
+      Headers header;
+      header.insert(std::make_pair("Range", range_val.str().c_str()));
+      auto rsp = client.Get(uri.c_str(), header);
+      //收到的回复正常
+      if(rsp && rsp->status == 206)
+      {
+        std::ofstream file(realpath, std::ios::binary);
+        //文件未成功打开
+        if(!file.is_open())
+        {
+          std::cerr << "file " << realpath << " open error" << std::endl;
+          return;
+        }
+        file.seekp(start, std::ios::beg);
+        file.write(&rsp->body[0], rsp->body.size());
+        //文件传输失败
+        if(!file.good())
+        {
+          std::cerr << "file " << realpath << " write error" << std::endl;
+          file.close();
+          return;
+        }
+        file.close();
+        *res = true;
+        std::cerr << "file " << realpath << " download range: " << range_val.str() << " success" << std::endl;
+        return;
+      }
+    }
+    //获取文件长度
+    int64_t GetFileSize(std::string host, std::string& name)
+    {
+      int64_t fsize = -1;
+      Client client(host.c_str(), _srv_port);
+      std::string path = "/list/" + name;
+      auto rsp = client.Head(path.c_str());
+      if(rsp && rsp->status == 200)
+      {
+        if(!rsp->has_header("Content-Length"))
+        {
+          return -1;
+        }
+        std::string len = rsp->get_header_value("Content-Length");
+        std::stringstream tmp;
+        tmp << len;
+        tmp >> fsize;
+      }
+      return fsize;
     }
     //下载文件
     bool DownloadFIle(std::string& name)
     {
-      Client client(_online_list[_host_idx].c_str(), _srv_port);
-      std::string uri = "/list/" + name;
-      auto rsp = client.Head(uri.c_str());
-      if(rsp && rsp->status == 200)
+      std::string host = _online_list[_host_idx];
+      int64_t fsize = GetFileSize(host.c_str(), name);
+      if(fsize < 0)
       {
-        //std::string realpath = "Shared/" + name;
-        //std::ofstream file(realpath, std::ios::binary);
-        ////打开失败
-        //if(!file.is_open())
-        //{
-        //  std::cerr << "file " << realpath << " open failed" << std::endl;
-        //  return false;
-        //}
-        ////全部写入文件中
-        //file.write(&rsp->body[0], rsp->body.size());
-        ////写入失败
-        //if(!file.good())
-        //{
-        //  std::cerr << "file " << realpath << " write body error" << std::endl;
-        //  return false;
-        //}
-        //file.close();
-        //std::cout << "file " << realpath << " download success" << std::endl;
-        if(rsp->has_header("Content-Length"))
+        std::cerr << "download file " << name << " failed" << std::endl;
+        return false;
+      }
+      int count = fsize / RANGE_SIZE;
+      std::vector<boost::thread> thr_list(count + 1);
+      std::vector<bool> res_list(count + 1);
+      for(int i = 0; i <= count; i++)
+      {
+        int64_t start, end, rlen;
+        start = i * RANGE_SIZE;
+        end = (i + 1) * RANGE_SIZE - 1;;
+        if(i == count)
         {
-          //表示可以获取文件长度进行分块下载
-          std::string len = rsp->get_header_value("Content-Length");
-          int64_t content_len;
-          std::stringstream tmp;
-          tmp << len;
-          tmp >> content_len;
-          int count = content_len / RANGE_SIZE;
-          std::vector<std::thread> thr_list(count + 1);
-          std::vector<Download> res_list(count + 1);
-          for(int i = 0; i <= count; i++)
+          if(fsize % RANGE_SIZE == 0)
           {
-            int64_t start = i * RANGE_SIZE;
-            int64_t end = (i + 1) * RANGE_SIZE;
-            if(i == count)
-            {
-              if(content_len % RANGE_SIZE == 0)
-              {
-                break;
-              }
-              end = content_len - 1;
-            }
-            int64_t len = end - start + 1;
-            res_list[i].SetData(host, name, start, end, len);
-            std::thread thr(&P2PClient::RangeDownload, this, &res_list[i]); 
-            thr_list[i] = std::move(thr);
+            break;
           }
-          bool ret = true;
-          for(int i = 0; i <= count; i++)
-          {
-            thr_list[i].join();
-            if(res_list[i]._res == true)
-            {
-              continue;
-            }
-            ret = false;
-          }
-          if(ret == false)
-          {
-            std::cerr << "download file " << name << " failed" << std::endl;;
-            return false;
-          }
+          end = fsize - 1;
         }
-        else 
+        rlen = end - start + 1;
+        boost::thread thr(&P2PClient::RangeDownload, this, host, name, start, end, &res_list[i]);
+        thr_list[i] = std::move(thr);
+      }
+      int ret = true;
+      for(int i = 0; i <= count; i++)
+      {
+        if(i == count  && fsize % RANGE_SIZE == 0)
         {
-          //无法进行分块下载
-          //1.正常下载（有风险）
-          //2.报错不支持
-          std::cerr << "download file " << name << " failed" << std::endl;;
-          return false;
+          break;
         }
+        thr_list[i].join();
+        if(res_list[i] == false)
+        {
+          ret = false;
+        }
+      }
+      if(ret == true)
+      {
+        std::cout << "download file " << name << " success" << std::endl;
+        return true;
       }
       else
       {
-        std::cerr << "file " << name << " download failed" << std::endl;
+        std::cout << "download file " << name << " success" << std::endl;
         return false;
       }
-      std::cout << "download file " << name << " success" << std::endl;
-      return true;
+   //   Client client(_online_list[_host_idx].c_str(), _srv_port);
+   //   std::string uri = "/list/" + name;
+   //   auto rsp = client.Head(uri.c_str());
+   //   if(rsp && rsp->status == 200)
+   //   {
+   //     //std::string realpath = "Shared/" + name;
+   //     //std::ofstream file(realpath, std::ios::binary);
+   //     ////打开失败
+   //     //if(!file.is_open())
+   //     //{
+   //     //  std::cerr << "file " << realpath << " open failed" << std::endl;
+   //     //  return false;
+   //     //}
+   //     ////全部写入文件中
+   //     //file.write(&rsp->body[0], rsp->body.size());
+   //     ////写入失败
+   //     //if(!file.good())
+   //     //{
+   //     //  std::cerr << "file " << realpath << " write body error" << std::endl;
+   //     //  return false;
+   //     //}
+   //     //file.close();
+   //     //std::cout << "file " << realpath << " download success" << std::endl;
+   //     if(rsp->has_header("Content-Length"))
+   //     {
+   //       //表示可以获取文件长度进行分块下载
+   //       std::string len = rsp->get_header_value("Content-Length");
+   //       int64_t content_len;
+   //       std::stringstream tmp;
+   //       tmp << len;
+   //       tmp >> content_len;
+   //       int count = content_len / RANGE_SIZE;
+   //       std::vector<std::thread> thr_list(count + 1);
+   //       std::vector<Download> res_list(count + 1);
+   //       for(int i = 0; i <= count; i++)
+   //       {
+   //         int64_t start = i * RANGE_SIZE;
+   //         int64_t end = (i + 1) * RANGE_SIZE;
+   //         if(i == count)
+   //         {
+   //           if(content_len % RANGE_SIZE == 0)
+   //           {
+   //             break;
+   //           }
+   //           end = content_len - 1;
+   //         }
+   //         int64_t len = end - start + 1;
+   //         res_list[i].SetData(host, name, start, end, len);
+   //         std::thread thr(&P2PClient::RangeDownload, this, &res_list[i]); 
+   //         thr_list[i] = std::move(thr);
+   //       }
+   //       bool ret = true;
+   //       for(int i = 0; i <= count; i++)
+   //       {
+   //         thr_list[i].join();
+   //         if(res_list[i]._res == true)
+   //         {
+   //           continue;
+   //         }
+   //         ret = false;
+   //       }
+   //       if(ret == false)
+   //       {
+   //         std::cerr << "download file " << name << " failed" << std::endl;;
+   //         return false;
+   //       }
+   //     }
+   //     else 
+   //     {
+   //       //无法进行分块下载
+   //       //1.正常下载（有风险）
+   //       //2.报错不支持
+   //       std::cerr << "download file " << name << " failed" << std::endl;;
+   //       return false;
+   //     }
+   //   }
+   //   else
+   //   {
+   //     std::cerr << "file " << name << " download failed" << std::endl;
+   //     return false;
+   //   }
+   //   std::cout << "download file " << name << " success" << std::endl;
+   //   return true;
     }
     //界面
     int DoFace()
