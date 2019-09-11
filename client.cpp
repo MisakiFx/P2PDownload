@@ -1,6 +1,8 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <fcntl.h>
+#include <unistd.h>
 #include <fstream>
 #include <ifaddrs.h>
 #include <netinet/in.h>
@@ -10,7 +12,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/thread.hpp>
-#define RANGE_SIZE (1024 << 20)
+#define RANGE_SIZE (100 << 20)
 using namespace httplib;
 namespace bf = boost::filesystem;
 //class Download
@@ -80,6 +82,7 @@ class P2PClient
             exit(0);
             break;
           default:
+            std::cout << "input error" << std::endl;
             break;
         }
       }
@@ -113,7 +116,7 @@ class P2PClient
         uint32_t net, host;
         net = ntohl(ip->sin_addr.s_addr & mask->sin_addr.s_addr);
         host = ntohl(~mask->sin_addr.s_addr);
-        for(int i = 1; i < host; i++)
+        for(int i = 128; i < 129; i++)
         {
           struct in_addr ip;
           ip.s_addr = htonl(net + i);
@@ -218,7 +221,7 @@ class P2PClient
       std::string uri = "/list/" + name;
       std::string realpath = "Download/" + name;
       std::stringstream range_val;
-      range_val << "bytes:" << start << "-" << end;
+      range_val << "bytes=" << start << "-" << end;
       Client client(host.c_str(), _srv_port);
       Headers header;
       header.insert(std::make_pair("Range", range_val.str().c_str()));
@@ -226,23 +229,23 @@ class P2PClient
       //收到的回复正常
       if(rsp && rsp->status == 206)
       {
-        std::ofstream file(realpath, std::ios::binary);
+        int fd = open(realpath.c_str(), O_CREAT | O_WRONLY, 0664);
         //文件未成功打开
-        if(!file.is_open())
+        if(fd < 0)
         {
           std::cerr << "file " << realpath << " open error" << std::endl;
           return;
         }
-        file.seekp(start, std::ios::beg);
-        file.write(&rsp->body[0], rsp->body.size());
+        lseek(fd, start, SEEK_SET);
+        int ret = write(fd, &rsp->body[0], rsp->body.size());
         //文件传输失败
-        if(!file.good())
+        if(ret < 0)
         {
           std::cerr << "file " << realpath << " write error" << std::endl;
-          file.close();
+          close(fd);
           return;
         }
-        file.close();
+        close(fd);
         *res = true;
         std::cerr << "file " << realpath << " download range: " << range_val.str() << " success" << std::endl;
         return;
@@ -281,7 +284,8 @@ class P2PClient
       int count = fsize / RANGE_SIZE;
       std::vector<boost::thread> thr_list(count + 1);
       std::vector<bool> res_list(count + 1);
-      for(int i = 0; i <= count; i++)
+      int ret = true;
+      for(int64_t i = 0; i <= count; i++)
       {
         int64_t start, end, rlen;
         start = i * RANGE_SIZE;
@@ -295,13 +299,20 @@ class P2PClient
           end = fsize - 1;
         }
         rlen = end - start + 1;
-        boost::thread thr(&P2PClient::RangeDownload, this, host, name, start, end, &res_list[i]);
-        thr_list[i] = std::move(thr);
+        bool res;
+        boost::thread thr(&P2PClient::RangeDownload, this, host, name, start, end, &res); 
+        thr.join();
+        if(res == false)
+        {
+          ret = false;
+        }
+        //thr_list[i] = std::move(thr);
+        //res_list[i] = res;
       }
-      int ret = true;
+      /*
       for(int i = 0; i <= count; i++)
       {
-        if(i == count  && fsize % RANGE_SIZE == 0)
+        if(i == count  && (fsize % RANGE_SIZE) == 0)
         {
           break;
         }
@@ -311,6 +322,7 @@ class P2PClient
           ret = false;
         }
       }
+      */
       if(ret == true)
       {
         std::cout << "download file " << name << " success" << std::endl;
@@ -318,7 +330,7 @@ class P2PClient
       }
       else
       {
-        std::cout << "download file " << name << " success" << std::endl;
+        std::cout << "download file " << name << " false" << std::endl;
         return false;
       }
    //   Client client(_online_list[_host_idx].c_str(), _srv_port);

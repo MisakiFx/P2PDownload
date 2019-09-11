@@ -2,7 +2,7 @@
 #include <boost/filesystem.hpp>
 #include "httplib.h"
 #include <fstream>
-#define SHARE_PATH "Download"
+#define SHARE_PATH "Shared"
 using namespace httplib;
 namespace bf = boost::filesystem;
 class P2PServer
@@ -21,6 +21,7 @@ public:
     _server.Get("/list", GetFileList);
     _server.Get("/list/(.*)", GetFileData);
     _server.listen("0.0.0.0", port);
+    return true;
   }
 private:
   Server _server;
@@ -60,6 +61,29 @@ private:
     rsp.status = 200;
     //rsp.set_content(&body[0], body.size(), "text");
   }
+  static bool RangeParse(std::string& range_val, int64_t& start, int64_t& len)
+  {
+      size_t pos1 = range_val.find('=');
+      size_t pos2 = range_val.find('-');
+      //没找到
+      if(pos1 == std::string::npos || pos2 == std::string::npos)
+      {
+        std::cerr << "range " << range_val << " format error" << std::endl;
+        return false;
+      }
+      int64_t end;
+      std::string rstart, rend;
+      rstart = range_val.substr(pos1 + 1, pos2 - pos1 - 1);
+      rend = range_val.substr(pos2 + 1, std::string::npos);
+      std::stringstream tmp;
+      tmp << rstart;
+      tmp >> start;
+      tmp.clear();
+      tmp << rend;
+      tmp >> end;
+      len = end - start + 1;
+      return true;
+  }
   //获取文件数据
   static void GetFileData(const Request& req, Response& rsp)
   {
@@ -75,28 +99,59 @@ private:
       rsp.status = 403;
       return;
     }
-    //打开文件
-    std::ifstream file(name, std::ios::binary);
-    if(!file.is_open())
-    {
-      std::cerr << "file open failed!" << std::endl;
-      rsp.status = 404;
-      return;
-    }
+    //条件符合正式开始传输文件
+    //获取文件大小
     int64_t fsize = bf::file_size(name);
-    rsp.body.resize(fsize);
-    //读取数据到bdoy中
-    file.read(&rsp.body[0], fsize);
-    if(!file.good())
+    //如果发送的是HEAD请求，客户端此时只想要文件长度，则只用包装头部即可
+    if(req.method == "HEAD")
     {
-      std::cerr << "read file" << name << " body error" << std::endl;
-      rsp.status = 500;
+      rsp.status = 200;
+      std::string len = std::to_string(fsize);
+      rsp.set_header("Content-Length", len.c_str());
       return;
     }
-    file.close();
-    //内容类型设置为二进制流
-    rsp.set_header("Content-Type", "application/octet-stream");
-    rsp.status = 200;
+    //GET方法，开始分块传输
+    else
+    {
+      //没有Range信息则直接报错
+      if(!req.has_header("Range"))
+      {
+        rsp.status = 400;
+        return;
+      }
+      std::string range_val = req.get_header_value("Range");
+      int64_t start, end, rlen;
+      //开始解析range_val:bytes=start-end
+      bool ret = RangeParse(range_val, start, rlen);
+      if(ret == false)
+      {
+        rsp.status = 400;
+        return;
+      }
+      //打开文件
+      std::ifstream file(name, std::ios::binary);
+      if(!file.is_open())
+      {
+        std::cerr << "file open failed!" << std::endl;
+        rsp.status = 404;
+        return;
+      }
+      file.seekg(start, std::ios::beg);
+      rsp.body.resize(rlen);
+      //读取数据到bdoy中
+      file.read(&rsp.body[0], rlen);
+      if(!file.good())
+      {
+        std::cerr << "read file" << name << " body error" << std::endl;
+        rsp.status = 500;
+        return;
+      }
+      file.close();
+      //内容类型设置为二进制流
+      rsp.set_header("Content-Type", "application/octet-stream");
+      rsp.status = 206;
+      std::cout << "file range " << range_val << " download success" << std::endl;
+    }
   }
 };
 int main()
