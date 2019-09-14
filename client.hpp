@@ -1,4 +1,5 @@
 #pragma once
+#include <stdio.h>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -161,14 +162,25 @@ class P2PClient
     //打印在线主机列表
     bool ShowOnlineHost()
     {
+      if(_online_list.empty())
+      {
+        std::cerr << "no online host!" << std::endl;
+        return false;
+      }
       for(int i = 0; i < _online_list.size(); i++)
       {
         std::cout << i << ". " << _online_list[i] << std::endl;
       }
+      std::cout << _online_list.size() << ". " << "return" << std::endl;
       std::cout << "please choose:";
       fflush(stdout);
       std::cin >> _host_idx;
-      if(_host_idx < 0 || _host_idx >= _online_list.size())
+      if(_host_idx == _online_list.size())
+      {
+        _host_idx = -1;
+        return false;
+      }
+      if(_host_idx < 0 || _host_idx > _online_list.size())
       {
         _host_idx = -1;
         std::cerr << "choose error" << std::endl;
@@ -179,7 +191,6 @@ class P2PClient
     //获取文件列表
     bool GetFileList()
     {
-
       Client client(_online_list[_host_idx].c_str(), _srv_port);
       auto rsp = client.Get("/list");
       if(rsp && rsp->status == 200)
@@ -199,15 +210,25 @@ class P2PClient
     //打印文件列表
     bool ShowFileList(std::string& name)
     {
+      if(_file_list.empty())
+      {
+        std::cerr << "no file!" << std::endl;
+        return false;
+      }
       for(int i = 0; i < _file_list.size(); i++)
       {
         std::cout << i << ". " << _file_list[i] << std::endl;
       }
+      std::cout << _file_list.size() << ". " << "return" << std::endl;
       std::cout << "please choose:";
       fflush(stdout);
       int file_idx;
       std::cin >> file_idx;
-      if(file_idx < 0 || file_idx >= _file_list.size())
+      if(file_idx == _file_list.size())
+      {
+        return false;
+      }
+      if(file_idx < 0 || file_idx > _file_list.size())
       {
         std::cerr << "choose error" << std::endl;
         return false;
@@ -286,6 +307,7 @@ class P2PClient
       std::vector<boost::thread> thr_list(count + 1);
       std::vector<int> res_list(count + 1);
       int ret = true;
+      int64_t rangeSize = ((int64_t)2 << 30);
       for(int64_t i = 0; i <= count; i++)
       {
         int64_t start, end, rlen;
@@ -302,23 +324,32 @@ class P2PClient
         rlen = end - start + 1;
         int* res = &res_list[i];
         boost::thread thr(&P2PClient::RangeDownload, this, host, name, start, end, res); 
-        //thr.join();
-        //if(res == false)
-        //{
-        //  ret = false;
-        //}
-        thr_list[i] = std::move(thr);
-      }
-      for(int i = 0; i <= count; i++)
-      {
-        if(i == count  && (fsize % RANGE_SIZE) == 0)
+        if(fsize >= rangeSize)
         {
-          break;
+          thr.join();
+          if(*res == 0)
+          {
+            ret = false;
+          }
         }
-        thr_list[i].join();
-        if(res_list[i] == 0)
+        else 
         {
-          ret = false;
+          thr_list[i] = std::move(thr);
+        }
+      }
+      if(fsize < rangeSize)
+      {
+        for(int i = 0; i <= count; i++)
+        {
+          if(i == count  && (fsize % RANGE_SIZE) == 0)
+          {
+            break;
+          }
+          thr_list[i].join();
+          if(res_list[i] == 0)
+          {
+            ret = false;
+          }
         }
       }
       if(ret == true)
@@ -425,7 +456,7 @@ class P2PClient
       int choose;
       std::cout << "please choose:";
       fflush(stdout);
-      std::cin >> choose;
+      scanf("%d", &choose);
       return choose;
     }
 };
