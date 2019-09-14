@@ -1,3 +1,4 @@
+#pragma  once
 #include <iostream>
 #include <boost/filesystem.hpp>
 #include "httplib.h"
@@ -46,7 +47,7 @@ private:
         continue;
       }
       //获取路径
-      std::string path = item_begin->path().string();
+      //std::string path = item_begin->path().string();
       //获取文件名
       std::string name = item_begin->path().filename().string();
       //std::cout << name << std::endl;
@@ -154,8 +155,8 @@ private:
     }
   }
 };
-int main()
-{
-  P2PServer srv;
-  srv.Start(9000);
-}
+//int main()
+//{
+//  P2PServer srv;
+//  srv.Start(9000);
+//}

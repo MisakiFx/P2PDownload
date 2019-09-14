@@ -1,3 +1,4 @@
+#pragma once
 #include <iostream>
 #include <string>
 #include <vector>
@@ -215,9 +216,9 @@ class P2PClient
       return true;
     }
     //分块下载，线程入口函数
-    void RangeDownload(std::string host, std::string name, int64_t start, int64_t end, bool* res)
+    void RangeDownload(std::string host, std::string name, int64_t start, int64_t end, int* res)
     {
-      *res = false;
+      *res = 0;
       std::string uri = "/list/" + name;
       std::string realpath = "Download/" + name;
       std::stringstream range_val;
@@ -246,7 +247,7 @@ class P2PClient
           return;
         }
         close(fd);
-        *res = true;
+        *res = 1;
         std::cerr << "file " << realpath << " download range: " << range_val.str() << " success" << std::endl;
         return;
       }
@@ -283,7 +284,7 @@ class P2PClient
       }
       int count = fsize / RANGE_SIZE;
       std::vector<boost::thread> thr_list(count + 1);
-      std::vector<bool> res_list(count + 1);
+      std::vector<int> res_list(count + 1);
       int ret = true;
       for(int64_t i = 0; i <= count; i++)
       {
@@ -299,17 +300,15 @@ class P2PClient
           end = fsize - 1;
         }
         rlen = end - start + 1;
-        bool res;
-        boost::thread thr(&P2PClient::RangeDownload, this, host, name, start, end, &res); 
-        thr.join();
-        if(res == false)
-        {
-          ret = false;
-        }
-        //thr_list[i] = std::move(thr);
-        //res_list[i] = res;
+        int* res = &res_list[i];
+        boost::thread thr(&P2PClient::RangeDownload, this, host, name, start, end, res); 
+        //thr.join();
+        //if(res == false)
+        //{
+        //  ret = false;
+        //}
+        thr_list[i] = std::move(thr);
       }
-      /*
       for(int i = 0; i <= count; i++)
       {
         if(i == count  && (fsize % RANGE_SIZE) == 0)
@@ -317,12 +316,11 @@ class P2PClient
           break;
         }
         thr_list[i].join();
-        if(res_list[i] == false)
+        if(res_list[i] == 0)
         {
           ret = false;
         }
       }
-      */
       if(ret == true)
       {
         std::cout << "download file " << name << " success" << std::endl;
@@ -431,9 +429,9 @@ class P2PClient
       return choose;
     }
 };
-int main()
-{
-  P2PClient client(9000);
-  client.Start();
-}
+//int main()
+//{
+//  P2PClient client(9000);
+//  client.Start();
+//}
 
