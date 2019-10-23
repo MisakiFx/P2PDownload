@@ -4,6 +4,7 @@
 #include "httplib.h"
 #include <fstream>
 #define SHARE_PATH "Shared"
+#define DOWNLOAD_PATH "Download"
 using namespace httplib;
 namespace bf = boost::filesystem;
 class P2PServer
@@ -14,6 +15,10 @@ public:
     if(!bf::exists(SHARE_PATH))
     {
       bf::create_directory(SHARE_PATH);
+    }
+    if(!bf::exists(DOWNLOAD_PATH))
+    {
+      bf::create_directory(DOWNLOAD_PATH);
     }
   }
   bool Start(uint16_t port)

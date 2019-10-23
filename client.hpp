@@ -116,9 +116,11 @@ class P2PClient
           continue;
         }
         uint32_t net, host;
+        //网络号
         net = ntohl(ip->sin_addr.s_addr & mask->sin_addr.s_addr);
+        //最大主机号
         host = ntohl(~mask->sin_addr.s_addr);
-        for(int i = 128; i < 129; i++)
+        for(int i = 1; i <= host; i++)
         {
           struct in_addr ip;
           ip.s_addr = htonl(net + i);
